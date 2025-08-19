@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
+import urllib.parse
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -12,104 +13,69 @@ st.set_page_config(
     initial_sidebar_state="auto"
 )
 
-# --- THEME HANDLER ---
-def set_theme():
-    if 'theme' not in st.session_state:
-        st.session_state.theme = 'light'
-    
-    if st.sidebar.toggle("🌙 Dark Mode", value=(st.session_state.theme == 'dark')):
-        st.session_state.theme = 'dark'
-    else:
-        st.session_state.theme = 'light'
-
-set_theme()
-
-# --- CUSTOM CSS FOR THEMES ---
-def get_theme_css():
-    if st.session_state.theme == 'dark':
-        return """
-        :root {
-            --primary-color: #4ade80;
-            --secondary-color: #34d399;
-            --background-color: #111827;
-            --card-bg: #1f2937;
-            --text-color: #f3f4f6;
-            --text-secondary: #9ca3af;
-            --border-color: #374151;
-        }
-        """
-    else:
-        return """
-        :root {
-            --primary-color: #2c7873;
-            --secondary-color: #60a5a0;
-            --background-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-color: #1e293b;
-            --text-secondary: #64748b;
-            --border-color: #e2e8f0;
-        }
-        """
-
-st.markdown(f"""
+# --- CUSTOM CSS (LIGHT MODE ONLY) ---
+st.markdown("""
 <style>
-{get_theme_css()}
-
 /* Import Inter font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 /* Global styles */
-body {{
-    background-color: var(--background-color);
-    color: var(--text-color);
+body {
+    background-color: #f8fafc;
+    color: #1e293b;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 15px;
-}}
+}
 
 /* Headers */
-h1, h2, h3, h4 {{
+h1, h2, h3, h4 {
     font-family: 'Inter', sans-serif;
     font-weight: 700;
-    color: var(--text-color);
-}}
+    color: #1e293b;
+}
 
 /* Sidebar */
-.css-1d391kg {{
-    background-color: var(--card-bg) !important;
-    border-right: 1px solid var(--border-color) !important;
-}}
+.css-1d391kg {
+    background-color: #ffffff !important;
+    border-right: 1px solid #e2e8f0 !important;
+}
 
 /* Cards */
-[data-testid="stMetric"] {{
-    background-color: var(--card-bg);
+[data-testid="stMetric"] {
+    background-color: #ffffff;
     border-radius: 12px;
     padding: 15px;
     box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-    border: 1px solid var(--border-color);
-}}
+    border: 1px solid #e2e8f0;
+}
 
 /* Buttons */
-.stButton>button {{
-    background-color: var(--primary-color);
+.stButton>button {
+    background-color: #2c7873;
     color: white;
     border: none;
     border-radius: 8px;
     padding: 10px 20px;
     font-weight: 500;
     font-family: 'Inter', sans-serif;
-}}
+}
 
-.stButton>button:hover {{
-    background-color: var(--secondary-color);
-}}
+.stButton>button:hover {
+    background-color: #235d5e;
+}
 
 /* Tables */
-.stDataFrame, .stTable {{
-    background-color: var(--card-bg);
+.stDataFrame, .stTable {
+    background-color: #ffffff;
     border-radius: 12px;
     overflow: hidden;
-    border: 1px solid var(--border-color);
-}}
+    border: 1px solid #e2e8f0;
+}
+
+/* Progress bars */
+.stProgress > div > div > div > div {
+    background-color: #2c7873;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,20 +85,21 @@ st.markdown("""
   <h1 style="display: flex; align-items: center; justify-content: center; gap: 10px;">
     <span>🛒</span> Achat Assistant
   </h1>
-  <p style="color: var(--text-secondary); max-width: 600px; margin: 0 auto;">
+  <p style="color: #64748b; max-width: 600px; margin: 0 auto;">
     Attribution intelligente des dossiers d'achat • Optimisation de la charge de travail
   </p>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown('<hr style="margin: 1rem 0;">', unsafe_allow_html=True)
+st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_html=True)
 
 # --- INIT DATA ---
 def init_data():
     if not os.path.exists("dossiers.csv"):
         pd.DataFrame(columns=[
             "ID", "Description", "Category", "Urgency", 
-            "Buyer", "Status", "Assigned_Date", "Closed_Date"
+            "Buyer", "Status", "Assigned_Date", "Closed_Date",
+            "Type_AO", "Devise", "Montant_Ajustement", "Date_Ajustement"
         ]).to_csv("dossiers.csv", index=False)
     
     if not os.path.exists("buyers.csv"):
@@ -148,7 +115,8 @@ def load_data():
     except:
         dossiers = pd.DataFrame(columns=[
             "ID", "Description", "Category", "Urgency", 
-            "Buyer", "Status", "Assigned_Date", "Closed_Date"
+            "Buyer", "Status", "Assigned_Date", "Closed_Date",
+            "Type_AO", "Devise", "Montant_Ajustement", "Date_Ajustement"
         ])
     
     try:
@@ -242,6 +210,9 @@ menu = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Configuration")
 
+# Lead name for emails
+ly_name = st.sidebar.text_input("Votre nom (pour les emails)", "Ly")
+
 # Buyer management
 if st.sidebar.toggle("Gérer les acheteurs", False):
     with st.sidebar.expander("➕ Ajouter un acheteur", expanded=True):
@@ -257,20 +228,17 @@ if st.sidebar.toggle("Gérer les acheteurs", False):
             elif new_buyer in st.session_state.buyers["Name"].values:
                 st.warning("⚠️ Cet acheteur existe déjà")
 
-# Data export
-# Export to Excel (clean tabular format)
-@st.cache_data
-def convert_df_to_excel(df):
-    import io
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Dossiers')
-    return buffer.getvalue()
-
-# Only show export if there's data
+# Excel export
 if not st.session_state.dossiers.empty:
-    excel_data = convert_df_to_excel(st.session_state.dossiers)
+    @st.cache_data
+    def convert_df_to_excel(df):
+        import io
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Dossiers')
+        return buffer.getvalue()
     
+    excel_data = convert_df_to_excel(st.session_state.dossiers)
     st.sidebar.download_button(
         label="💾 Exporter en Excel",
         data=excel_data,
@@ -278,7 +246,7 @@ if not st.session_state.dossiers.empty:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-    
+
 # --- MAIN CONTENT ---
 if menu == "🏠 Accueil":
     st.markdown("### Bienvenue dans Achat Assistant")
@@ -287,7 +255,8 @@ if menu == "🏠 Accueil":
     with col1:
         st.metric("Total Dossiers", len(st.session_state.dossiers))
     with col2:
-        st.metric("Dossiers Ouverts", len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"]))
+        open_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"])
+        st.metric("Dossiers Ouverts", open_count)
     with col3:
         st.metric("Acheteurs Actifs", len(st.session_state.buyers))
     
@@ -333,14 +302,14 @@ elif menu == "📝 Créer un Dossier":
                     index=1
                 )
 
-            # --- NEW PROCUREMENT FIELDS ---
+            # Procurement fields
             st.markdown("#### 🏢 Processus d'achat")
 
             col3, col4 = st.columns(2)
             with col3:
                 type_ao = st.selectbox(
                     "Type AO",
-                    ["", "AO Ouvert", "AO fermé"],
+                    ["", "AO Ouvert", "AO Restreint", "Dialogue Compétitif", "Marché à Procédure Adaptée (MPA)", "Pas d'AO"],
                     help="Type de procédure d'appel d'offres"
                 )
             with col4:
@@ -426,7 +395,51 @@ elif menu == "📝 Créer un Dossier":
                     - Ajustement: {montant_ajustement:+.2f} {devise}
                     - Date d'affectation: {assigned_date}
                     """)
+
+                    # --- EMAIL NOTIFICATION ---
+                    st.markdown("### 📧 Envoyer une notification")
                     
+                    # Get buyer email
+                    buyer_email_row = st.session_state.buyers[st.session_state.buyers["Name"] == assigned_to]
+                    buyer_email = ""
+                    if not buyer_email_row.empty:
+                        buyer_email = buyer_email_row["Email"].values[0]
+                        if pd.isna(buyer_email):
+                            buyer_email = ""
+                    
+                    # Email content
+                    subject = f"[Achat] Nouveau dossier assigné : {new_id}"
+                    body = f"""Bonjour {assigned_to},
+
+Un nouveau dossier d'achat vous a été attribué automatiquement :
+
+- **ID du dossier** : {new_id}
+- **Description** : {desc}
+- **Catégorie** : {category}
+- **Urgence** : {urgency}
+- **Date d'affectation** : {datetime.now().strftime("%d/%m/%Y à %H:%M")}
+
+Merci de prendre en charge ce dossier dans les plus brefs délais.
+
+Cordialement,
+{ly_name}"""
+                    
+                    # Create mailto link
+                    mailto_url = f"mailto:{buyer_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
+                    
+                    # Email button
+                    st.markdown(
+                        f'<a href="{mailto_url}" target="_blank">'
+                        '<button style="background-color:#2c7873; color:white; border:none; padding:10px 20px; '
+                        'border-radius:8px; font-size:16px; width:100%; cursor:pointer;">'
+                        '🟢 Ouvrir l\'email dans Outlook'
+                        '</button></a>',
+                        unsafe_allow_html=True
+                    )
+                    
+                    if not buyer_email:
+                        st.warning("ℹ️ Aucun email configuré pour cet acheteur. Veuillez compléter l'email dans 'Gérer les acheteurs'.")
+
 elif menu == "👥 Suivi des Acheteurs":
     st.markdown("### 👥 Suivi des Acheteurs")
     
@@ -507,11 +520,20 @@ elif menu == "👥 Suivi des Acheteurs":
                 hide_index=True
             )
 
-       
+            # Export option for this buyer
+            buyer_data = buyer_dossiers.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Exporter les dossiers de " + selected_buyer,
+                buyer_data,
+                f"dossiers_{selected_buyer.lower().replace(' ', '_')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
+
         else:
             st.info(f"✅ {selected_buyer} n'a aucun dossier actif en ce moment.")
 
-        # Optional: Show closed files
+        # Closed files
         with st.expander("📋 Voir les dossiers terminés (fermés ou annulés)"):
             closed_files = st.session_state.dossiers[
                 (st.session_state.dossiers["Buyer"] == selected_buyer) &
@@ -525,15 +547,13 @@ elif menu == "👥 Suivi des Acheteurs":
                 )
             else:
                 st.info("Aucun dossier fermé ou annulé.")
-                                    
+
 elif menu == "🔧 Gestion":
     st.markdown("### 🔧 Gestion des Dossiers")
     
     if st.session_state.dossiers.empty:
         st.info("ℹ️ Aucun dossier créé. Allez dans 'Créer un Dossier' pour commencer.")
     else:
-        filtered = st.session_state.dossiers.copy()
-        
         st.markdown("### 🔍 Sélectionner un dossier")
         
         # Option 1: Manual input
@@ -546,7 +566,7 @@ elif menu == "🔧 Gestion":
         # Option 2: Dropdown selection
         auto_id = st.selectbox(
             "Ou choisissez dans la liste",
-            options=[""] + filtered["ID"].tolist(),
+            options=[""] + st.session_state.dossiers["ID"].tolist(),
             format_func=lambda x: "Sélectionnez un dossier" if x == "" else x
         )
         
@@ -560,8 +580,8 @@ elif menu == "🔧 Gestion":
         
         # Validate and process
         if selected_id:
-            if selected_id in filtered["ID"].values:
-                dossier = filtered[filtered["ID"] == selected_id].iloc[0]
+            if selected_id in st.session_state.dossiers["ID"].values:
+                dossier = st.session_state.dossiers[st.session_state.dossiers["ID"] == selected_id].iloc[0]
                 
                 with st.expander("📄 Détails du dossier", expanded=True):
                     col1, col2 = st.columns(2)
@@ -581,8 +601,8 @@ elif menu == "🔧 Gestion":
                 st.subheader("✏️ Mettre à jour le statut")
                 new_status = st.radio(
                     "Nouveau statut",
-                    ["Open", "Closed", "Cancelled"],
-                    index=["Open", "Closed", "Cancelled"].index(dossier["Status"])
+                    ["Open", "In Progress", "Closed", "Cancelled"],
+                    index=["Open", "In Progress", "Closed", "Cancelled"].index(dossier["Status"])
                 )
                 
                 if new_status != dossier["Status"]:
@@ -607,20 +627,71 @@ elif menu == "🔧 Gestion":
 elif menu == "📈 KPI":
     st.markdown("### 📈 KPI & Améliorations")
     
-    if not st.session_state.dossiers.empty:
-        col1, col2, col3 = st.columns(3)
+    if st.session_state.dossiers.empty:
+        st.info("ℹ️ Aucune donnée disponible. Créez des dossiers pour voir les KPIs.")
+    else:
+        # KPI Cards
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total", len(st.session_state.dossiers))
+            st.metric("Total Dossiers", len(st.session_state.dossiers))
         with col2:
-            st.metric("Ouverts", len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"]))
+            open_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"])
+            st.metric("Dossiers Ouverts", open_count)
         with col3:
-            st.metric("Fermés", len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Closed"]))
+            closed_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Closed"])
+            st.metric("Dossiers Terminés", closed_count)
+        with col4:
+            if closed_count > 0:
+                time_diff = pd.to_datetime(st.session_state.dossiers["Closed_Date"]) - pd.to_datetime(st.session_state.dossiers["Assigned_Date"])
+                avg_time = time_diff.mean().days
+                st.metric("Temps moyen", f"{avg_time:.1f} jours")
+            else:
+                st.metric("Temps moyen", "N/A")
         
+        # Charts
+        st.subheader("Répartition des charges")
         workload = get_buyer_workload()
         if not workload.empty:
-            st.bar_chart(workload)
-    else:
-        st.info("Aucune donnée disponible.")
+            workload_df = workload.reset_index()
+            workload_df.columns = ["Buyer", "Active Files"]
+            st.bar_chart(workload_df.set_index("Buyer"))
+        else:
+            st.info("Aucune donnée de charge disponible")
+        
+        st.subheader("Évolution des dossiers")
+        if not st.session_state.dossiers.empty and "Assigned_Date" in st.session_state.dossiers.columns:
+            st.session_state.dossiers["Date"] = pd.to_datetime(st.session_state.dossiers["Assigned_Date"]).dt.date
+            daily_counts = st.session_state.dossiers.groupby(["Date", "Status"]).size().unstack(fill_value=0)
+            st.line_chart(daily_counts)
+        else:
+            st.info("Pas assez de données pour l'évolution temporelle")
+        
+        # Fairness indicator
+        st.subheader("Équité dans la répartition")
+        if not workload.empty:
+            max_load = workload.max()
+            min_load = workload.min()
+            fairness = 100 - ((max_load - min_load) / max_load * 100) if max_load > 0 else 100
+            
+            st.progress(int(fairness))
+            st.markdown(f"**Indice d'équité** : `{fairness:.1f}%`")
+            
+            if fairness > 80:
+                st.success("✅ **Répartition très équitable** des charges")
+            elif fairness > 60:
+                st.warning("⚠️ **Répartition acceptable**, à surveiller")
+            else:
+                st.error("❌ **Répartition inégale** - à corriger")
+            
+            # Improvement suggestion
+            if min_load < max_load * 0.7:
+                most_busy = workload.idxmax()
+                least_busy = workload.idxmin()
+                st.info(f"""
+                **Recommandation d'ajustement** :  
+                - Transférer des dossiers de **{most_busy}** vers **{least_busy}**  
+                - {least_busy} a **{int(max_load - min_load)} dossier(s)** de moins que {most_busy}
+                """)
 
 # --- FOOTER ---
-st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
