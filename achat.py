@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="auto"
 )
 
-# --- CUSTOM CSS (LIGHT MODE ONLY) ---
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 /* Import Inter font */
@@ -97,9 +97,9 @@ st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_
 def init_data():
     if not os.path.exists("dossiers.csv"):
         pd.DataFrame(columns=[
-            "ID", "Description", "Category", "Urgency", 
-            "Buyer", "Status", "Assigned_Date", "Closed_Date",
-            "Type_AO", "Devise", "Montant_Ajustement", "Date_Ajustement"
+            "Code_Demande", "Description", "Category", "Buyer", "Status", 
+            "Assigned_Date", "Closed_Date", "Type_AO", "Devise", 
+            "Montant_Estime", "Quantite"
         ]).to_csv("dossiers.csv", index=False)
     
     if not os.path.exists("buyers.csv"):
@@ -114,9 +114,9 @@ def load_data():
         dossiers = pd.read_csv("dossiers.csv", parse_dates=["Assigned_Date", "Closed_Date"])
     except:
         dossiers = pd.DataFrame(columns=[
-            "ID", "Description", "Category", "Urgency", 
-            "Buyer", "Status", "Assigned_Date", "Closed_Date",
-            "Type_AO", "Devise", "Montant_Ajustement", "Date_Ajustement"
+            "Code_Demande", "Description", "Category", "Buyer", "Status", 
+            "Assigned_Date", "Closed_Date", "Type_AO", "Devise", 
+            "Montant_Estime", "Quantite"
         ])
     
     try:
@@ -138,14 +138,14 @@ def ensure_datetime(df, col):
         df[col] = pd.to_datetime(df[col], errors='coerce')
     return df
 
-def generate_dossier_id():
+def generate_demande_code():
     today = datetime.now().strftime("%Y%m%d")
     if not st.session_state.dossiers.empty:
-        last_id = st.session_state.dossiers["ID"].max()
-        num = int(last_id.split("-")[-1]) + 1 if "-" in last_id else 1
+        last_code = st.session_state.dossiers["Code_Demande"].max()
+        num = int(last_code.split("-")[-1]) + 1 if "-" in last_code else 1
     else:
         num = 1
-    return f"PR-{today}-{num:03d}"
+    return f"DA-{today}-{num:03d}"
 
 def get_buyer_workload():
     if st.session_state.dossiers.empty:
@@ -210,14 +210,14 @@ menu = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Configuration")
 
-# Lead name for emails
-ly_name = st.sidebar.text_input("Votre nom (pour les emails)", "Ly")
+# Lead name for reference
+ly_name = st.sidebar.text_input("Votre nom (pour référence)", "Mme zahrae touhami")
 
 # Buyer management
 if st.sidebar.toggle("Gérer les acheteurs", False):
     with st.sidebar.expander("➕ Ajouter un acheteur", expanded=True):
         new_buyer = st.text_input("Nom de l'acheteur")
-        new_email = st.text_input("Email (optionnel)")
+        new_email = st.text_input("Email")
         if st.button("Ajouter", use_container_width=True):
             if new_buyer and new_buyer not in st.session_state.buyers["Name"].values:
                 new_row = pd.DataFrame([{"Name": new_buyer, "Email": new_email}])
@@ -276,11 +276,11 @@ elif menu == "📝 Créer un Dossier":
         with st.form("new_dossier_form"):
             st.markdown("#### 🔹 Informations du dossier")
 
-            # Manual ID input (optional)
-            manual_id = st.text_input(
-                "ID du dossier (optionnel)",
-                placeholder="Ex: PR-20250405-001",
-                help="Laissez vide pour générer un ID automatiquement"
+            # Manual ID input (now called "Code Demande d'Achat")
+            manual_code = st.text_input(
+                "Code Demande d'Achat (optionnel)",
+                placeholder="Ex: DA-20250405-001",
+                help="Laissez vide pour générer un code automatiquement"
             )
 
             desc = st.text_area(
@@ -296,21 +296,25 @@ elif menu == "📝 Créer un Dossier":
                     ["Informatique", "Pièce de rechange", "Service", "Matériel", "Autre"]
                 )
             with col2:
-                urgency = st.selectbox(
-                    "Urgence",
-                    ["Élevée", "Moyenne", "Faible"],
-                    index=1
+                # New fields
+                quantite = st.number_input(
+                    "Quantité",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    help="Nombre d'unités nécessaires"
                 )
 
-            # Procurement fields
-            st.markdown("#### 🏢 Processus d'achat")
-
+            # New field: Estimated amount
             col3, col4 = st.columns(2)
             with col3:
-                type_ao = st.selectbox(
-                    "Type AO",
-                    ["", "AO Ouvert", "AO Restreint", "Dialogue Compétitif", "Marché à Procédure Adaptée (MPA)", "Pas d'AO"],
-                    help="Type de procédure d'appel d'offres"
+                montant_estime = st.number_input(
+                    "Montant estimé",
+                    min_value=0.0,
+                    value=0.0,
+                    step=100.0,
+                    format="%.2f",
+                    help="Coût total estimé pour cette demande"
                 )
             with col4:
                 devise = st.selectbox(
@@ -319,23 +323,14 @@ elif menu == "📝 Créer un Dossier":
                     index=0
                 )
 
-            st.markdown("#### 🔄 Ajustements (si applicable)")
+            # Procurement fields
+            st.markdown("#### 🏢 Processus d'achat")
 
-            col5, col6 = st.columns(2)
-            with col5:
-                montant_ajustement = st.number_input(
-                    "Montant d'ajustement",
-                    value=0.0,
-                    step=100.0,
-                    format="%.2f",
-                    help="Montant ajouté (+) ou retiré (-) du montant initial"
-                )
-            with col6:
-                date_ajustement = st.date_input(
-                    "Date d'ajustement",
-                    value=None,
-                    help="Date à laquelle l'ajustement a été appliqué"
-                )
+            type_ao = st.selectbox(
+                "Type AO",
+                ["AO Ouvert", "AO fermé"],
+                help="Type de procédure d'appel d'offres"
+            )
 
             submitted = st.form_submit_button("🟢 Créer et assigner", type="primary")
 
@@ -343,14 +338,14 @@ elif menu == "📝 Créer un Dossier":
                 if not desc.strip():
                     st.error("❌ Veuillez entrer une description")
                 else:
-                    # Generate or use manual ID
-                    if manual_id:
-                        new_id = manual_id.strip()
-                        if new_id in st.session_state.dossiers["ID"].values:
-                            st.warning(f"⚠️ L'ID `{new_id}` existe déjà. Veuillez en choisir un autre.")
+                    # Generate or use manual code
+                    if manual_code:
+                        new_code = manual_code.strip()
+                        if new_code in st.session_state.dossiers["Code_Demande"].values:
+                            st.warning(f"⚠️ Le code `{new_code}` existe déjà. Veuillez en choisir un autre.")
                             st.stop()
                     else:
-                        new_id = generate_dossier_id()
+                        new_code = generate_demande_code()
 
                     # Auto-assign buyer
                     assigned_to = assign_to_least_busy()
@@ -360,18 +355,17 @@ elif menu == "📝 Créer un Dossier":
 
                     # Prepare new dossier
                     new_dossier = {
-                        "ID": new_id,
+                        "Code_Demande": new_code,
                         "Description": desc,
                         "Category": category,
-                        "Urgency": urgency,
                         "Buyer": assigned_to,
                         "Status": "Open",
                         "Assigned_Date": assigned_date,
                         "Closed_Date": "",
                         "Type_AO": type_ao or "",
                         "Devise": devise,
-                        "Montant_Ajustement": montant_ajustement,
-                        "Date_Ajustement": date_ajustement.strftime("%Y-%m-%d") if date_ajustement else ""
+                        "Montant_Estime": montant_estime,
+                        "Quantite": quantite
                     }
 
                     # Add to session state
@@ -382,7 +376,7 @@ elif menu == "📝 Créer un Dossier":
                     # Success message
                     st.success(f"""
                     ✅ **Dossier créé avec succès !**
-                    - **ID**: `{new_id}`
+                    - **Code Demande**: `{new_code}`
                     - **Assigné à**: {assigned_to}
                     - **Statut**: Ouvert
                     """)
@@ -391,13 +385,13 @@ elif menu == "📝 Créer un Dossier":
                     st.info(f"""
                     **Détails d'affectation**:
                     - Type AO: {type_ao or 'Non spécifié'}
-                    - Devise: {devise}
-                    - Ajustement: {montant_ajustement:+.2f} {devise}
+                    - Quantité: {quantite}
+                    - Montant estimé: {montant_estime:.2f} {devise}
                     - Date d'affectation: {assigned_date}
                     """)
 
-                    # --- EMAIL NOTIFICATION ---
-                    st.markdown("### 📧 Envoyer une notification")
+                    # --- EMAIL NOTIFICATION (SIMPLIFIED) ---
+                    st.markdown("### 📧 Notifier l'acheteur")
                     
                     # Get buyer email
                     buyer_email_row = st.session_state.buyers[st.session_state.buyers["Name"] == assigned_to]
@@ -407,32 +401,15 @@ elif menu == "📝 Créer un Dossier":
                         if pd.isna(buyer_email):
                             buyer_email = ""
                     
-                    # Email content
-                    subject = f"[Achat] Nouveau dossier assigné : {new_id}"
-                    body = f"""Bonjour {assigned_to},
-
-Un nouveau dossier d'achat vous a été attribué automatiquement :
-
-- **ID du dossier** : {new_id}
-- **Description** : {desc}
-- **Catégorie** : {category}
-- **Urgence** : {urgency}
-- **Date d'affectation** : {datetime.now().strftime("%d/%m/%Y à %H:%M")}
-
-Merci de prendre en charge ce dossier dans les plus brefs délais.
-
-Cordialement,
-{ly_name}"""
-                    
-                    # Create mailto link
-                    mailto_url = f"mailto:{buyer_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
+                    # Create mailto link (only with email address)
+                    mailto_url = f"mailto:{buyer_email}"
                     
                     # Email button
                     st.markdown(
                         f'<a href="{mailto_url}" target="_blank">'
                         '<button style="background-color:#2c7873; color:white; border:none; padding:10px 20px; '
                         'border-radius:8px; font-size:16px; width:100%; cursor:pointer;">'
-                        '🟢 Ouvrir l\'email dans Outlook'
+                        '🟢 Ouvrir Outlook pour contacter l\'acheteur'
                         '</button></a>',
                         unsafe_allow_html=True
                     )
@@ -485,32 +462,28 @@ elif menu == "👥 Suivi des Acheteurs":
         if not buyer_dossiers.empty:
             st.markdown(f"#### 📂 Dossiers actifs de **{selected_buyer}**")
 
-            # Format date for display
-            buyer_dossiers["Date_Ajustement"] = pd.to_datetime(buyer_dossiers["Date_Ajustement"], errors='coerce').dt.strftime("%d/%m/%Y").fillna("")
-
             # Prepare display columns
             display_df = buyer_dossiers[[
-                "ID", "Description", "Category", "Urgency", "Status",
-                "Type_AO", "Devise", "Montant_Ajustement", "Date_Ajustement", "Assigned_Date"
+                "Code_Demande", "Description", "Category", "Status",
+                "Type_AO", "Devise", "Montant_Estime", "Quantite", "Assigned_Date"
             ]].copy()
 
             # Rename columns for clarity
             display_df.rename(columns={
-                "ID": "Dossier ID",
+                "Code_Demande": "Code Demande",
                 "Description": "Description",
                 "Category": "Catégorie",
-                "Urgency": "Urgence",
                 "Status": "Statut",
                 "Type_AO": "Type AO",
                 "Devise": "Devise",
-                "Montant_Ajustement": "Montant Ajustement (devise)",
-                "Date_Ajustement": "Date Ajustement",
+                "Montant_Estime": "Montant Estimé",
+                "Quantite": "Quantité",
                 "Assigned_Date": "Date d'Affectation"
             }, inplace=True)
 
             # Format numeric column
-            display_df["Montant Ajustement (devise)"] = display_df["Montant Ajustement (devise)"].apply(
-                lambda x: f"{x:+,.2f}"
+            display_df["Montant Estimé"] = display_df["Montant Estimé"].apply(
+                lambda x: f"{x:,.2f}"
             )
 
             # Display as table
@@ -542,7 +515,7 @@ elif menu == "👥 Suivi des Acheteurs":
 
             if not closed_files.empty:
                 st.dataframe(
-                    closed_files[["ID", "Description", "Status", "Assigned_Date", "Closed_Date"]],
+                    closed_files[["Code_Demande", "Description", "Status", "Assigned_Date", "Closed_Date"]],
                     hide_index=True
                 )
             else:
@@ -557,39 +530,39 @@ elif menu == "🔧 Gestion":
         st.markdown("### 🔍 Sélectionner un dossier")
         
         # Option 1: Manual input
-        manual_id = st.text_input(
-            "Tapez l'ID du dossier",
-            placeholder="Ex: PR-20250405-001",
-            help="Utile si vous connaissez déjà l'ID"
+        manual_code = st.text_input(
+            "Tapez le code de la demande",
+            placeholder="Ex: DA-20250405-001",
+            help="Utile si vous connaissez déjà le code"
         )
         
         # Option 2: Dropdown selection
-        auto_id = st.selectbox(
+        auto_code = st.selectbox(
             "Ou choisissez dans la liste",
-            options=[""] + st.session_state.dossiers["ID"].tolist(),
+            options=[""] + st.session_state.dossiers["Code_Demande"].tolist(),
             format_func=lambda x: "Sélectionnez un dossier" if x == "" else x
         )
         
         # Priority: manual input > dropdown
-        if manual_id:
-            selected_id = manual_id
-        elif auto_id:
-            selected_id = auto_id
+        if manual_code:
+            selected_code = manual_code
+        elif auto_code:
+            selected_code = auto_code
         else:
-            selected_id = None
+            selected_code = None
         
         # Validate and process
-        if selected_id:
-            if selected_id in st.session_state.dossiers["ID"].values:
-                dossier = st.session_state.dossiers[st.session_state.dossiers["ID"] == selected_id].iloc[0]
+        if selected_code:
+            if selected_code in st.session_state.dossiers["Code_Demande"].values:
+                dossier = st.session_state.dossiers[st.session_state.dossiers["Code_Demande"] == selected_code].iloc[0]
                 
                 with st.expander("📄 Détails du dossier", expanded=True):
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.write(f"**ID**: `{dossier['ID']}`")
+                        st.write(f"**Code Demande**: `{dossier['Code_Demande']}`")
                         st.write(f"**Description**: {dossier['Description']}")
                         st.write(f"**Catégorie**: {dossier['Category']}")
-                        st.write(f"**Urgence**: {dossier['Urgency']}")
+                        st.write(f"**Quantité**: {dossier['Quantite']}")
                     with col2:
                         st.write(f"**Acheteur**: {dossier['Buyer']}")
                         st.write(f"**Statut actuel**: {dossier['Status']}")
@@ -609,20 +582,20 @@ elif menu == "🔧 Gestion":
                     reason = st.text_area("Commentaire (optionnel)")
                     if st.button("💾 Enregistrer les modifications", type="primary"):
                         # Update status
-                        st.session_state.dossiers.loc[st.session_state.dossiers["ID"] == selected_id, "Status"] = new_status
+                        st.session_state.dossiers.loc[st.session_state.dossiers["Code_Demande"] == selected_code, "Status"] = new_status
                         
                         # Update closed date if needed
                         if new_status == "Closed" and (pd.isna(dossier["Closed_Date"]) or dossier["Closed_Date"] == ""):
-                            st.session_state.dossiers.loc[st.session_state.dossiers["ID"] == selected_id, "Closed_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            st.session_state.dossiers.loc[st.session_state.dossiers["Code_Demande"] == selected_code, "Closed_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                         
                         save_data()
-                        st.success(f"✅ Statut mis à jour : `{selected_id}` → {new_status}")
+                        st.success(f"✅ Statut mis à jour : `{selected_code}` → {new_status}")
                         st.rerun()
             else:
-                st.warning(f"❌ Aucun dossier trouvé avec l'ID : `{selected_id}`")
+                st.warning(f"❌ Aucun dossier trouvé avec le code : `{selected_code}`")
                 st.info("Vérifiez l'orthographe ou utilisez la liste déroulante.")
         else:
-            st.info("👉 Veuillez entrer un ID ou sélectionner un dossier dans la liste.")
+            st.info("👉 Veuillez entrer un code ou sélectionner un dossier dans la liste.")
 
 elif menu == "📈 KPI":
     st.markdown("### 📈 KPI & Améliorations")

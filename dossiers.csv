@@ -1,1 +1,1 @@
-ID,Description,Category,Urgency,Buyer,Status,Assigned_Date,Closed_Date
+Code_Demande,Description,Category,Buyer,Status,Assigned_Date,Closed_Date,Type_AO,Devise,Montant_Estime,Quantite
