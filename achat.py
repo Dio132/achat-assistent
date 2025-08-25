@@ -668,3 +668,6 @@ elif menu == "📈 KPI":
 
 # --- FOOTER ---
 st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
+
+
+
