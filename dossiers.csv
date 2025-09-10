@@ -1,0 +1,11 @@
+Code_Demande,Description,Category,Buyer,Status,Assigned_Date,Closed_Date,Type_AO,Devise,Montant_Estime,Quantite,Type,Articles,Fournisseurs_Etrangers,Complexite,Date,Fournisseurs_Total,Categorie,Categorie_Risk
+DA-20250901-001,A,,Bob,Affecté,2025-09-01 08:51:00,,AO Ouvert,MAD,0.0,,Pièce de rechange,5,0,6.166749451212101,,2,,
+DA-20250901-002,B,,Alice,Affecté,2025-09-01 09:12,,AO Ouvert,MAD,0.0,,Marché,1,2,25.0976,,4,,
+DA-20250901-003,C,,Clara,Affecté,2025-09-01 10:07,,AO Ouvert,MAD,0.0,,Equipement,15,1,20.81401433445421,,3,,
+DA-20250901-004,D,,David,Affecté,2025-09-01 10:09,,AO Ouvert,MAD,0.0,,Pièce de rechange,8,1,14.478258300936218,,2,,
+DA-20250901-005,E,,David,Affecté,2025-09-01 10:25,,,MAD,0.0,,Equipement,10,0,9.525762163995896,,2,,
+DA-20250901-006,F,,Bob,Affecté,2025-09-01 10:27,,,MAD,0.0,,Pièce de rechange,100,3,376.5706225287607,,5,,
+DA-20250901-007,T,,Clara,Affecté,2025-09-01 10:32,,,MAD,0.0,,Marché,1,0,5.208000000000001,,2,,
+DA-20250901-008,Q,,David,Affecté,2025-09-01 10:33,,,MAD,0.0,,Pièce de rechange,20,1,41.55791170834576,,3,,
+DA-20250901-009,P,,Bob,Affecté,2025-09-01 10:34,,,MAD,0.0,,Equipement,5,0,4.932764578585005,,2,,
+DA-20250901-010,Pk,,Alice,Affecté,2025-09-01 10:35,,,MAD,0.0,,Marché,1,1,19.096,,3,,
