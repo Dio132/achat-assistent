@@ -390,7 +390,7 @@ elif menu == "📝 Créer un Dossier":
         
         st.selectbox(
             "Type AO",
-            ["AO Ouvert", "AO Restreint"],
+            ["AO Ouvert", "AO Restreint", "Autre"],
             help="Type de procédure d'appel d'offres",
             key="type_ao"
         )
