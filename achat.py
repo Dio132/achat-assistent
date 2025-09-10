@@ -76,6 +76,11 @@ h1, h2, h3, h4 {
 .stProgress > div > div > div > div {
     background-color: #2c7873;
 }
+
+/* Alerts */
+.stAlert {
+    border-radius: 8px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,9 +102,9 @@ st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_
 def init_data():
     if not os.path.exists("dossiers.csv"):
         pd.DataFrame(columns=[
-            "Code_Demande", "Description", "Category", "Buyer", "Status", 
-            "Assigned_Date", "Closed_Date", "Type_AO", "Devise", 
-            "Montant_Estime", "Quantite"
+            "Code_Demande", "Description", "Type", "Articles", "Fournisseurs_Etrangers",
+            "Fournisseurs_Total", "Buyer", "Status", "Assigned_Date", "Closed_Date",
+            "Type_AO", "Devise", "Montant_Estime", "Complexite"
         ]).to_csv("dossiers.csv", index=False)
     
     if not os.path.exists("buyers.csv"):
@@ -114,9 +119,9 @@ def load_data():
         dossiers = pd.read_csv("dossiers.csv", parse_dates=["Assigned_Date", "Closed_Date"])
     except:
         dossiers = pd.DataFrame(columns=[
-            "Code_Demande", "Description", "Category", "Buyer", "Status", 
-            "Assigned_Date", "Closed_Date", "Type_AO", "Devise", 
-            "Montant_Estime", "Quantite"
+            "Code_Demande", "Description", "Type", "Articles", "Fournisseurs_Etrangers",
+            "Fournisseurs_Total", "Buyer", "Status", "Assigned_Date", "Closed_Date",
+            "Type_AO", "Devise", "Montant_Estime", "Complexite"
         ])
     
     try:
@@ -133,10 +138,91 @@ if 'dossiers' not in st.session_state:
     st.session_state.buyers = buyers_df
 
 # --- HELPER FUNCTIONS ---
-def ensure_datetime(df, col):
-    if col in df.columns and not pd.api.types.is_datetime64_any_dtype(df[col]):
-        df[col] = pd.to_datetime(df[col], errors='coerce')
-    return df
+import math
+
+def calculate_dossier_score(
+    dossier_type,
+    n_articles,
+    n_foreign_suppliers,
+    n_suppliers_total=None,
+):
+    params = {
+        "Marché": {"base": 6.0, "a": 0.2, "b": 1.0},
+        "Pièce de rechange": {"base": 0.0, "a": 1.0, "b": 1.05},
+        "Equipement": {"base": 0.5, "a": 0.8, "b": 1.03}
+    }
+
+    p = params.get(dossier_type, params["Pièce de rechange"])
+    n_articles = max(1, n_articles)
+    core = p["base"] + p["a"] * (n_articles ** p["b"])
+
+    # Supplier factor
+    if n_foreign_suppliers <= 0:
+        supplier_factor = 1.0
+    elif n_foreign_suppliers == 1:
+        supplier_factor = 1.4
+    else:
+        supplier_factor = min(1.4 + 0.2 * (n_foreign_suppliers - 1), 2.0)
+        core *= 1.10
+
+    # Comparison factor
+    if n_suppliers_total is None or n_suppliers_total < n_foreign_suppliers:
+        n_suppliers_total = max(1, n_foreign_suppliers)
+    compare_factor = 1.0 + 0.05 * max(0, n_suppliers_total - 1)
+    compare_factor = min(compare_factor, 1.4)
+
+    # Preliminary complexity
+    complexity = core * supplier_factor * compare_factor 
+
+    # --- Soft cap: logarithmic damping for very large dossiers ---
+    soft_limit = 100.0
+    if complexity > soft_limit:
+        complexity = soft_limit + math.log1p(complexity - soft_limit) * 20  # grows slowly
+
+    return complexity
+
+
+def get_buyer_total_workload():
+    """
+    Get total workload per buyer = sum of complexity scores of active dossiers
+    """
+    if st.session_state.dossiers.empty:
+        return pd.Series(dtype=float)
+    
+    active_files = st.session_state.dossiers[st.session_state.dossiers["Status"] == "Affecté"].copy()
+    
+    # Ensure complexity is numeric
+    active_files["Complexite"] = pd.to_numeric(active_files["Complexite"], errors='coerce')
+    
+    # Sum scores per buyer
+    workload = active_files.groupby("Buyer")["Complexite"].sum()
+    
+    # Ensure all buyers appear (even with 0)
+    for buyer in st.session_state.buyers["Name"]:
+        if buyer not in workload.index:
+            workload[buyer] = 0.0
+    
+    return workload
+
+def assign_smart_immediate(complexity_score):
+    """
+    Assign to buyer with lowest workload AFTER assignment
+    :param complexity_score: complexity of the new dossier
+    :return: best buyer
+    """
+    # Get current workload of each buyer
+    workload = get_buyer_total_workload()
+    
+    if workload.empty:
+        return st.session_state.buyers["Name"].iloc[0] if not st.session_state.buyers.empty else "N/A"
+    
+    # Simulate: what will each buyer's workload be AFTER assignment?
+    projected_loads = {}
+    for buyer in workload.index:
+        projected_loads[buyer] = workload[buyer] + complexity_score
+    
+    # Return buyer with lowest projected load
+    return min(projected_loads, key=projected_loads.get)
 
 def generate_demande_code():
     today = datetime.now().strftime("%Y%m%d")
@@ -146,51 +232,6 @@ def generate_demande_code():
     else:
         num = 1
     return f"DA-{today}-{num:03d}"
-
-def get_buyer_workload():
-    if st.session_state.dossiers.empty:
-        return pd.Series(dtype=int)
-    
-    open_files = st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"]
-    if open_files.empty:
-        return pd.Series(0, index=st.session_state.buyers["Name"])
-    
-    workload = open_files["Buyer"].value_counts().reindex(st.session_state.buyers["Name"], fill_value=0)
-    return workload
-
-def get_last_assignment():
-    if st.session_state.dossiers.empty:
-        return pd.Series(dtype='datetime64[ns]')
-    
-    open_files = st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"].copy()
-    
-    if not pd.api.types.is_datetime64_any_dtype(open_files["Assigned_Date"]):
-        open_files["Assigned_Date"] = pd.to_datetime(open_files["Assigned_Date"], errors='coerce')
-    
-    open_files = open_files.dropna(subset=["Assigned_Date"])
-    
-    if open_files.empty:
-        return pd.Series(dtype='datetime64[ns]')
-    
-    last_assign = open_files.groupby("Buyer")["Assigned_Date"].max()
-    return last_assign
-
-def assign_to_least_busy():
-    workload = get_buyer_workload()
-    last_assign = get_last_assignment()
-    
-    if workload.empty:
-        return st.session_state.buyers["Name"].iloc[0] if not st.session_state.buyers.empty else "N/A"
-    
-    min_work = workload.min()
-    candidates = workload[workload == min_work].index.tolist()
-    
-    if len(candidates) > 1 and not last_assign.empty:
-        candidate_assign = last_assign.reindex(candidates)
-        sorted_candidates = candidate_assign.sort_values().index.tolist()
-        return sorted_candidates[0]
-    
-    return candidates[0]
 
 def save_data():
     st.session_state.dossiers.to_csv("dossiers.csv", index=False)
@@ -211,13 +252,14 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### Configuration")
 
 # Lead name for reference
-ly_name = st.sidebar.text_input("Votre nom (pour référence)", "Mme zahrae touhami")
+ly_name = st.sidebar.text_input("Votre nom (pour référence)", "Mme Touhami Zahra")
 
 # Buyer management
 if st.sidebar.toggle("Gérer les acheteurs", False):
     with st.sidebar.expander("➕ Ajouter un acheteur", expanded=True):
         new_buyer = st.text_input("Nom de l'acheteur")
-        new_email = st.text_input("Email")
+        new_email = st.text_input("Email (optionnel)")
+        
         if st.button("Ajouter", use_container_width=True):
             if new_buyer and new_buyer not in st.session_state.buyers["Name"].values:
                 new_row = pd.DataFrame([{"Name": new_buyer, "Email": new_email}])
@@ -255,156 +297,234 @@ if menu == "🏠 Accueil":
     with col1:
         st.metric("Total Dossiers", len(st.session_state.dossiers))
     with col2:
-        open_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"])
-        st.metric("Dossiers Ouverts", open_count)
+        active_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Affecté"])
+        st.metric("Dossiers Actifs", active_count)
     with col3:
         st.metric("Acheteurs Actifs", len(st.session_state.buyers))
     
     st.info("""
     1. **Ajoutez des acheteurs** dans la barre latérale  
     2. **Créez des dossiers** dans 'Créer un Dossier'  
-    3. L'outil attribue **automatiquement** au moins chargé  
+    3. L'outil attribue **automatiquement** ou vous choisissez  
     4. Suivez la charge et les KPIs
     """)
-
 elif menu == "📝 Créer un Dossier":
     st.markdown("### 📝 Créer un nouveau dossier d'achat")
+    
+    # ✅ RESET LOGIC - MUST BE AT VERY TOP
+    if 'form_submitted' in st.session_state and st.session_state.form_submitted:
+        st.session_state.form_submitted = False
+        
+        # Clear ALL form values
+        keys_to_clear = [
+            "manual_code", "desc",
+            "n_articles", "n_suppliers_total", "n_foreign_suppliers",
+            "effort_level", "montant_estime", "devise", "type_ao", "manual_buyer_select"
+        ]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Force rerun to reflect cleared state
+        st.rerun()
     
     if st.session_state.buyers.empty:
         st.warning("⚠️ Aucun acheteur configuré. Veuillez ajouter des acheteurs dans la barre latérale.")
     else:
-        with st.form("new_dossier_form"):
-            st.markdown("#### 🔹 Informations du dossier")
-
-            # Manual ID input (now called "Code Demande d'Achat")
-            manual_code = st.text_input(
-                "Code Demande d'Achat (optionnel)",
-                placeholder="Ex: DA-20250405-001",
-                help="Laissez vide pour générer un code automatiquement"
-            )
-
-            desc = st.text_area(
-                "Description du besoin",
-                placeholder="Ex: 'Ordinateur portable pour nouveau collaborateur'",
-                help="Décrivez clairement le besoin"
-            )
-
+        # --- Step 1: Choose Dossier Type ---
+        st.markdown("#### 🔹 1. Sélectionner le type de dossier")
+        dossier_type = st.radio(
+            "Type de dossier",
+            ["Pièce de rechange", "Marché", "Equipement"],
+            key="dossier_type_select"
+        )
+        
+        st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_html=True)
+        
+        # --- Step 2: Fill Parameters ---
+        st.markdown(f"#### 📦 2. Remplir les paramètres — {dossier_type}")
+        
+        # Code Demande d'Achat
+        st.text_input(
+            "Code Demande d'Achat",
+            key="manual_code"
+        )
+        
+        st.text_area(
+            "Description du besoin",
+            help="Décrivez clairement le besoin",
+            key="desc"
+        )
+        
+        # --- Type-Specific Fields ---
+        if dossier_type in ["Pièce de rechange", "Equipement"]:
             col1, col2 = st.columns(2)
             with col1:
-                category = st.selectbox(
-                    "Catégorie",
-                    ["Informatique", "Pièce de rechange", "Service", "Matériel", "Autre"]
-                )
+                st.number_input("Nombre d'articles", min_value=1, value=1, step=1, key="n_articles")
             with col2:
-                # New fields
-                quantite = st.number_input(
-                    "Quantité",
-                    min_value=1,
-                    value=1,
-                    step=1,
-                    help="Nombre d'unités nécessaires"
-                )
-
-            # New field: Estimated amount
-            col3, col4 = st.columns(2)
-            with col3:
-                montant_estime = st.number_input(
-                    "Montant estimé",
-                    min_value=0.0,
-                    value=0.0,
-                    step=100.0,
-                    format="%.2f",
-                    help="Coût total estimé pour cette demande"
-                )
-            with col4:
-                devise = st.selectbox(
-                    "Devise",
-                    ["MAD", "EUR", "USD", "GBP", "Autre"],
-                    index=0
-                )
-
-            # Procurement fields
-            st.markdown("#### 🏢 Processus d'achat")
-
-            type_ao = st.selectbox(
-                "Type AO",
-                ["AO Ouvert", "AO fermé"],
-                help="Type de procédure d'appel d'offres"
+                st.number_input("Nombre total de fournisseurs", min_value=1, value=1, step=1, key="n_suppliers_total")
+            
+            st.number_input("Nombre de fournisseurs étrangers", min_value=0, value=0, step=1, key="n_foreign_suppliers")
+        
+        elif dossier_type == "Marché":
+            st.markdown("#### 🔍 Niveau d'effort attendu (facultatif)")
+            st.slider(
+                "Complexité du marché (1–5, 3 = moyen)",
+                min_value=1,
+                max_value=5,
+                value=3,
+                help="Facultatif : 1 = simple, 5 = très complexe",
+                key="effort_level"
             )
+            
+            st.number_input("Nombre total de fournisseurs", min_value=1, value=1, step=1, key="n_suppliers_total")
+            st.number_input("Nombre de fournisseurs étrangers", min_value=0, value=0, step=1, key="n_foreign_suppliers")
 
-            submitted = st.form_submit_button("🟢 Créer et assigner", type="primary")
+        # --- Common Fields ---
+        st.markdown("#### 🏢 Processus d'achat")
+        col3, col4 = st.columns(2)
+        with col3:
+            st.number_input("Montant estimé", min_value=0.0, value=0.0, step=100.0, format="%.2f", key="montant_estime")
+        with col4:
+            st.selectbox("Devise", ["MAD", "EUR", "USD", "GBP", "Autre"], index=0, key="devise")
+        
+        st.selectbox(
+            "Type AO",
+            ["AO Ouvert", "AO Restreint"],
+            help="Type de procédure d'appel d'offres",
+            key="type_ao"
+        )
+        
+        # --- Calculate Complexity ---
+        n_articles = st.session_state.n_articles if dossier_type in ["Pièce de rechange", "Equipement"] else 1
+        n_foreign_suppliers = st.session_state.n_foreign_suppliers
+        n_suppliers_total = st.session_state.n_suppliers_total
+        
+        if dossier_type == "Marché":
+            
+    # Define base complexity purely by effort level
+            BASE_COMPLEXITY_BY_EFFORT = {
+                1: 10.0,   # Simple framework agreement, known suppliers
+                2: 20.0,   # Standard tender, moderate due diligence
+                3: 35.0,   # Medium complexity, multi-supplier, moderate risk
+                4: 60.0,   # High complexity, international, legal reviews, negotiations
+                5: 100.0   # Very high complexity: multi-year, multi-lot, regulatory, high-value
+    }
+            effort_level = st.session_state.get("effort_level", 3)
+            base_complexity = BASE_COMPLEXITY_BY_EFFORT[effort_level]
 
-            if submitted:
-                if not desc.strip():
-                    st.error("❌ Veuillez entrer une description")
+    # Supplier factor (same logic as before)
+            if n_foreign_suppliers <= 0:
+                supplier_factor = 1.0
+            elif n_foreign_suppliers == 1:
+                supplier_factor = 1.4
+            else:
+                supplier_factor = min(1.4 + 0.2 * (n_foreign_suppliers - 1), 2.0)
+                base_complexity *= 1.10  # extra penalty for multiple foreign + multiplier
+
+    # Comparison factor (same logic)
+            if n_suppliers_total is None or n_suppliers_total < n_foreign_suppliers:
+                n_suppliers_total = max(1, n_foreign_suppliers)
+            compare_factor = 1.0 + 0.05 * max(0, n_suppliers_total - 1)
+            compare_factor = min(compare_factor, 1.4)
+
+    # Final complexity
+            complexity_score = base_complexity * supplier_factor * compare_factor
+
+    # Apply soft cap (same as before)
+            soft_limit = 100.0
+            if complexity_score > soft_limit:
+                complexity_score = soft_limit + math.log1p(complexity_score - soft_limit) * 20
+
+        else:
+    # Use original formula for other types
+            complexity_score = calculate_dossier_score(
+            dossier_type, n_articles, n_foreign_suppliers, n_suppliers_total
+    )
+        
+
+        st.metric("Niveau de complexité", f"{complexity_score:.1f} unités")
+        
+        # --- Assignment Control ---
+        st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_html=True)
+        st.markdown("#### 🎯 Attribution du dossier")
+        
+        auto_assign = st.checkbox(
+            "Laisser l'application choisir l'acheteur",
+            value=True,
+            help="Cochez pour une attribution intelligente basée sur la charge de travail"
+        )
+        
+        assigned_to = None
+        if auto_assign:
+            assigned_to = assign_smart_immediate(complexity_score)
+        else:
+            buyer_names = st.session_state.buyers["Name"].tolist()
+            assigned_to = st.selectbox("Sélectionner l'acheteur", buyer_names, key="manual_buyer_select")
+            workload = get_buyer_total_workload()
+            current_load = workload.get(assigned_to, 0)
+            st.info(f"📊 Charge actuelle de {assigned_to} : {current_load:.1f} unités")
+        
+        # --- Submit Button ---
+        st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_html=True)
+        
+        if st.button("🟢 Créer et assigner", type="primary"):
+            if not st.session_state.desc.strip():
+                st.error("❌ Veuillez entrer une description")
+            else:
+                # Generate or use manual code
+                manual_code_val = st.session_state.manual_code.strip() if st.session_state.manual_code else ""
+                
+                if manual_code_val:
+                    if manual_code_val in st.session_state.dossiers["Code_Demande"].values:
+                        st.warning(f"⚠️ Le code `{manual_code_val}` existe déjà. Veuillez en choisir un autre.")
+                        st.stop()
+                    new_code = manual_code_val
                 else:
-                    # Generate or use manual code
-                    if manual_code:
-                        new_code = manual_code.strip()
-                        if new_code in st.session_state.dossiers["Code_Demande"].values:
-                            st.warning(f"⚠️ Le code `{new_code}` existe déjà. Veuillez en choisir un autre.")
-                            st.stop()
-                    else:
-                        new_code = generate_demande_code()
+                    new_code = generate_demande_code()
 
-                    # Auto-assign buyer
-                    assigned_to = assign_to_least_busy()
+                # Create new dossier
+                new_dossier = {
+                    "Code_Demande": new_code,
+                    "Description": st.session_state.desc,
+                    "Type": dossier_type,
+                    "Articles": n_articles,
+                    "Fournisseurs_Etrangers": n_foreign_suppliers,
+                    "Fournisseurs_Total": n_suppliers_total,
+                    "Buyer": assigned_to,
+                    "Status": "Affecté",
+                    "Assigned_Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "Closed_Date": "",
+                    "Type_AO": st.session_state.type_ao or "",
+                    "Devise": st.session_state.devise,
+                    "Montant_Estime": st.session_state.montant_estime,
+                    "Complexite": complexity_score
+                }
 
-                    # Get current datetime for assignment
-                    assigned_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+                # Add to session state
+                new_row = pd.DataFrame([new_dossier])
+                st.session_state.dossiers = pd.concat([st.session_state.dossiers, new_row], ignore_index=True)
+                save_data()
 
-                    # Prepare new dossier
-                    new_dossier = {
-                        "Code_Demande": new_code,
-                        "Description": desc,
-                        "Category": category,
-                        "Buyer": assigned_to,
-                        "Status": "Open",
-                        "Assigned_Date": assigned_date,
-                        "Closed_Date": "",
-                        "Type_AO": type_ao or "",
-                        "Devise": devise,
-                        "Montant_Estime": montant_estime,
-                        "Quantite": quantite
-                    }
+                # ✅ SHOW SUCCESS MESSAGE (it will render)
+                st.success(f"""
+                ✅ **Dossier créé avec succès !**
+                - **Code Demande**: `{new_code}`
+                - **Assigné à**: {assigned_to}
+                - **Statut**: Affecté
+                - **Complexité**: {complexity_score:.1f} unités
+                """)
 
-                    # Add to session state
-                    new_row = pd.DataFrame([new_dossier])
-                    st.session_state.dossiers = pd.concat([st.session_state.dossiers, new_row], ignore_index=True)
-                    save_data()
+                # 📧 Outlook Email Button
+                buyer_email_row = st.session_state.buyers[st.session_state.buyers["Name"] == assigned_to]
+                buyer_email = ""
+                if not buyer_email_row.empty:
+                    buyer_email = buyer_email_row["Email"].values[0]
+                    if pd.isna(buyer_email):
+                        buyer_email = ""
 
-                    # Success message
-                    st.success(f"""
-                    ✅ **Dossier créé avec succès !**
-                    - **Code Demande**: `{new_code}`
-                    - **Assigné à**: {assigned_to}
-                    - **Statut**: Ouvert
-                    """)
-
-                    # Show assignment details
-                    st.info(f"""
-                    **Détails d'affectation**:
-                    - Type AO: {type_ao or 'Non spécifié'}
-                    - Quantité: {quantite}
-                    - Montant estimé: {montant_estime:.2f} {devise}
-                    - Date d'affectation: {assigned_date}
-                    """)
-
-                    # --- EMAIL NOTIFICATION (SIMPLIFIED) ---
-                    st.markdown("### 📧 Notifier l'acheteur")
-                    
-                    # Get buyer email
-                    buyer_email_row = st.session_state.buyers[st.session_state.buyers["Name"] == assigned_to]
-                    buyer_email = ""
-                    if not buyer_email_row.empty:
-                        buyer_email = buyer_email_row["Email"].values[0]
-                        if pd.isna(buyer_email):
-                            buyer_email = ""
-                    
-                    # Create mailto link (only with email address)
+                if buyer_email:
                     mailto_url = f"mailto:{buyer_email}"
-                    
-                    # Email button
                     st.markdown(
                         f'<a href="{mailto_url}" target="_blank">'
                         '<button style="background-color:#2c7873; color:white; border:none; padding:10px 20px; '
@@ -413,10 +533,13 @@ elif menu == "📝 Créer un Dossier":
                         '</button></a>',
                         unsafe_allow_html=True
                     )
-                    
-                    if not buyer_email:
-                        st.warning("ℹ️ Aucun email configuré pour cet acheteur. Veuillez compléter l'email dans 'Gérer les acheteurs'.")
-
+                else:
+                    st.warning("ℹ️ Aucun email configuré pour cet acheteur.")
+                
+                # ✅ SET FLAG FOR RESET (don't rerun yet)
+                st.session_state.form_submitted = True
+                
+                   
 elif menu == "👥 Suivi des Acheteurs":
     st.markdown("### 👥 Suivi des Acheteurs")
     
@@ -429,70 +552,70 @@ elif menu == "👥 Suivi des Acheteurs":
             st.session_state.buyers["Name"],
             help="Choisissez un acheteur pour voir ses dossiers en cours"
         )
-
+        
         # Get workload
-        workload = get_buyer_workload()
+        workload = get_buyer_total_workload()
         current_load = workload.get(selected_buyer, 0)
-
+        
         # Show metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Dossiers Actifs", current_load)
+            st.metric("Charge Pondérée", f"{current_load:.1f}")
         with col2:
             # Last assignment
-            last_assign = get_last_assignment()
-            last_date = last_assign.get(selected_buyer)
-            if pd.notna(last_date) and last_date is not None:
-                display = last_date.strftime("%d/%m/%Y")
+            active_files = st.session_state.dossiers[st.session_state.dossiers["Status"] == "Affecté"].copy()
+            if not pd.api.types.is_datetime64_any_dtype(active_files["Assigned_Date"]):
+                active_files["Assigned_Date"] = pd.to_datetime(active_files["Assigned_Date"], errors='coerce')
+            
+            buyer_files = active_files[active_files["Buyer"] == selected_buyer]
+            if not buyer_files.empty:
+                last_date = buyer_files["Assigned_Date"].max()
+                display = last_date.strftime("%d/%m/%Y") if pd.notna(last_date) else "Jamais"
             else:
                 display = "Jamais"
             st.metric("Dernière Attribution", display)
         with col3:
             total_assigned = len(st.session_state.dossiers[st.session_state.dossiers["Buyer"] == selected_buyer])
             st.metric("Total Traité", total_assigned)
-
+        
         st.markdown("---")
-
+        
         # Filter active dossiers for this buyer
         buyer_dossiers = st.session_state.dossiers[
             (st.session_state.dossiers["Buyer"] == selected_buyer) &
-            (st.session_state.dossiers["Status"] == "Open")
+            (st.session_state.dossiers["Status"] == "Affecté")
         ].copy()
-
+        
         if not buyer_dossiers.empty:
             st.markdown(f"#### 📂 Dossiers actifs de **{selected_buyer}**")
-
+            
             # Prepare display columns
             display_df = buyer_dossiers[[
-                "Code_Demande", "Description", "Category", "Status",
-                "Type_AO", "Devise", "Montant_Estime", "Quantite", "Assigned_Date"
+                "Code_Demande", "Description", "Type", "Status",
+                "Articles", "Fournisseurs_Etrangers", "Fournisseurs_Total", 
+                "Complexite", "Assigned_Date"
             ]].copy()
-
+            
             # Rename columns for clarity
             display_df.rename(columns={
                 "Code_Demande": "Code Demande",
                 "Description": "Description",
-                "Category": "Catégorie",
+                "Type": "Type",
                 "Status": "Statut",
-                "Type_AO": "Type AO",
-                "Devise": "Devise",
-                "Montant_Estime": "Montant Estimé",
-                "Quantite": "Quantité",
+                "Articles": "Articles",
+                "Fournisseurs_Etrangers": "Fourn. Étrangers",
+                "Fournisseurs_Total": "Fourn. Total",
+                "Complexite": "Complexité",
                 "Assigned_Date": "Date d'Affectation"
             }, inplace=True)
-
-            # Format numeric column
-            display_df["Montant Estimé"] = display_df["Montant Estimé"].apply(
-                lambda x: f"{x:,.2f}"
-            )
-
+            
             # Display as table
             st.dataframe(
                 display_df,
                 use_container_width=True,
                 hide_index=True
             )
-
+            
             # Export option for this buyer
             buyer_data = buyer_dossiers.to_csv(index=False).encode('utf-8')
             st.download_button(
@@ -502,17 +625,16 @@ elif menu == "👥 Suivi des Acheteurs":
                 "text/csv",
                 use_container_width=True
             )
-
         else:
             st.info(f"✅ {selected_buyer} n'a aucun dossier actif en ce moment.")
-
+        
         # Closed files
         with st.expander("📋 Voir les dossiers terminés (fermés ou annulés)"):
             closed_files = st.session_state.dossiers[
                 (st.session_state.dossiers["Buyer"] == selected_buyer) &
                 (st.session_state.dossiers["Status"].isin(["Closed", "Cancelled"]))
             ]
-
+            
             if not closed_files.empty:
                 st.dataframe(
                     closed_files[["Code_Demande", "Description", "Status", "Assigned_Date", "Closed_Date"]],
@@ -561,12 +683,15 @@ elif menu == "🔧 Gestion":
                     with col1:
                         st.write(f"**Code Demande**: `{dossier['Code_Demande']}`")
                         st.write(f"**Description**: {dossier['Description']}")
-                        st.write(f"**Catégorie**: {dossier['Category']}")
-                        st.write(f"**Quantité**: {dossier['Quantite']}")
+                        st.write(f"**Type**: {dossier['Type']}")
+                        st.write(f"**Articles**: {dossier['Articles']}")
+                        st.write(f"**Fournisseurs Étrangers**: {dossier['Fournisseurs_Etrangers']}")
+                        st.write(f"**Fournisseurs Total**: {dossier['Fournisseurs_Total']}")
                     with col2:
                         st.write(f"**Acheteur**: {dossier['Buyer']}")
                         st.write(f"**Statut actuel**: {dossier['Status']}")
                         st.write(f"**Date d'attribution**: {dossier['Assigned_Date']}")
+                        st.write(f"**Complexité**: {dossier['Complexite']:.1f} unités")
                         if pd.notna(dossier.get("Closed_Date", None)):
                             st.write(f"**Date de clôture**: {dossier['Closed_Date']}")
                 
@@ -574,8 +699,13 @@ elif menu == "🔧 Gestion":
                 st.subheader("✏️ Mettre à jour le statut")
                 new_status = st.radio(
                     "Nouveau statut",
-                    ["Open", "In Progress", "Closed", "Cancelled"],
-                    index=["Open", "In Progress", "Closed", "Cancelled"].index(dossier["Status"])
+                    ["Affecté", "Closed", "Cancelled"],
+                    format_func=lambda x: {
+                        "Affecté": "Affecté",
+                        "Closed": "Fermé",
+                        "Cancelled": "Annulé"
+                    }[x],
+                    index=["Affecté", "Closed", "Cancelled"].index(dossier["Status"])
                 )
                 
                 if new_status != dossier["Status"]:
@@ -585,7 +715,7 @@ elif menu == "🔧 Gestion":
                         st.session_state.dossiers.loc[st.session_state.dossiers["Code_Demande"] == selected_code, "Status"] = new_status
                         
                         # Update closed date if needed
-                        if new_status == "Closed" and (pd.isna(dossier["Closed_Date"]) or dossier["Closed_Date"] == ""):
+                        if new_status in ["Closed", "Cancelled"] and (pd.isna(dossier["Closed_Date"]) or dossier["Closed_Date"] == ""):
                             st.session_state.dossiers.loc[st.session_state.dossiers["Code_Demande"] == selected_code, "Closed_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                         
                         save_data()
@@ -608,66 +738,42 @@ elif menu == "📈 KPI":
         with col1:
             st.metric("Total Dossiers", len(st.session_state.dossiers))
         with col2:
-            open_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Open"])
-            st.metric("Dossiers Ouverts", open_count)
+            active_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Affecté"])
+            st.metric("Dossiers Actifs", active_count)
         with col3:
             closed_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Closed"])
-            st.metric("Dossiers Terminés", closed_count)
+            st.metric("Dossiers Fermés", closed_count)
         with col4:
-            if closed_count > 0:
-                time_diff = pd.to_datetime(st.session_state.dossiers["Closed_Date"]) - pd.to_datetime(st.session_state.dossiers["Assigned_Date"])
-                avg_time = time_diff.mean().days
-                st.metric("Temps moyen", f"{avg_time:.1f} jours")
-            else:
-                st.metric("Temps moyen", "N/A")
+            cancelled_count = len(st.session_state.dossiers[st.session_state.dossiers["Status"] == "Cancelled"])
+            st.metric("Dossiers Annulés", cancelled_count)
         
         # Charts
-        st.subheader("Répartition des charges")
-        workload = get_buyer_workload()
+        st.subheader("Répartition des charges (pondérée)")
+        workload = get_buyer_total_workload()
         if not workload.empty:
             workload_df = workload.reset_index()
-            workload_df.columns = ["Buyer", "Active Files"]
+            workload_df.columns = ["Buyer", "Charge"]
             st.bar_chart(workload_df.set_index("Buyer"))
         else:
             st.info("Aucune donnée de charge disponible")
         
         st.subheader("Évolution des dossiers")
         if not st.session_state.dossiers.empty and "Assigned_Date" in st.session_state.dossiers.columns:
-            st.session_state.dossiers["Date"] = pd.to_datetime(st.session_state.dossiers["Assigned_Date"]).dt.date
+            st.session_state.dossiers["Date"] = pd.to_datetime(
+    st.session_state.dossiers["Assigned_Date"], 
+    format="%Y-%m-%d %H:%M",  # ← Explicitly match your format
+    errors='coerce'           # ← Safely handle any malformed dates
+).dt.date
             daily_counts = st.session_state.dossiers.groupby(["Date", "Status"]).size().unstack(fill_value=0)
             st.line_chart(daily_counts)
         else:
             st.info("Pas assez de données pour l'évolution temporelle")
         
         # Fairness indicator
-        st.subheader("Équité dans la répartition")
-        if not workload.empty:
-            max_load = workload.max()
-            min_load = workload.min()
-            fairness = 100 - ((max_load - min_load) / max_load * 100) if max_load > 0 else 100
-            
-            st.progress(int(fairness))
-            st.markdown(f"**Indice d'équité** : `{fairness:.1f}%`")
-            
-            if fairness > 80:
-                st.success("✅ **Répartition très équitable** des charges")
-            elif fairness > 60:
-                st.warning("⚠️ **Répartition acceptable**, à surveiller")
-            else:
-                st.error("❌ **Répartition inégale** - à corriger")
-            
-            # Improvement suggestion
-            if min_load < max_load * 0.7:
-                most_busy = workload.idxmax()
-                least_busy = workload.idxmin()
-                st.info(f"""
-                **Recommandation d'ajustement** :  
-                - Transférer des dossiers de **{most_busy}** vers **{least_busy}**  
-                - {least_busy} a **{int(max_load - min_load)} dossier(s)** de moins que {most_busy}
-                """)
+        # Status analysis
+        st.subheader("Analyse par statut")
+        status_counts = st.session_state.dossiers["Status"].value_counts()
+        st.bar_chart(status_counts)
 
 # --- FOOTER ---
 st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
-
-
-
