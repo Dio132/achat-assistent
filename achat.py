@@ -244,7 +244,7 @@ st.sidebar.markdown("### Navigation")
 
 menu = st.sidebar.radio(
     "Menu",
-    ["🏠 Accueil", "📝 Créer un Dossier", "👥 Suivi des Acheteurs", "🔧 Gestion", "📈 KPI"],
+    ["🏠 Accueil", "📝 Créer un Dossier", "👥 Suivi des Acheteurs", "ParallelGroup", "🔧 Gestion", "📈 KPI"],
     label_visibility="collapsed"
 )
 
@@ -401,48 +401,39 @@ elif menu == "📝 Créer un Dossier":
         n_suppliers_total = st.session_state.n_suppliers_total
         
         if dossier_type == "Marché":
-            
-    # Define base complexity purely by effort level
             BASE_COMPLEXITY_BY_EFFORT = {
-                1: 10.0,   # Simple framework agreement, known suppliers
-                2: 20.0,   # Standard tender, moderate due diligence
-                3: 35.0,   # Medium complexity, multi-supplier, moderate risk
-                4: 60.0,   # High complexity, international, legal reviews, negotiations
-                5: 100.0   # Very high complexity: multi-year, multi-lot, regulatory, high-value
-    }
+                1: 10.0,
+                2: 20.0,
+                3: 35.0,
+                4: 60.0,
+                5: 100.0
+            }
             effort_level = st.session_state.get("effort_level", 3)
             base_complexity = BASE_COMPLEXITY_BY_EFFORT[effort_level]
 
-    # Supplier factor (same logic as before)
             if n_foreign_suppliers <= 0:
                 supplier_factor = 1.0
             elif n_foreign_suppliers == 1:
                 supplier_factor = 1.4
             else:
                 supplier_factor = min(1.4 + 0.2 * (n_foreign_suppliers - 1), 2.0)
-                base_complexity *= 1.10  # extra penalty for multiple foreign + multiplier
+                base_complexity *= 1.10
 
-    # Comparison factor (same logic)
             if n_suppliers_total is None or n_suppliers_total < n_foreign_suppliers:
                 n_suppliers_total = max(1, n_foreign_suppliers)
             compare_factor = 1.0 + 0.05 * max(0, n_suppliers_total - 1)
             compare_factor = min(compare_factor, 1.4)
 
-    # Final complexity
             complexity_score = base_complexity * supplier_factor * compare_factor
-
-    # Apply soft cap (same as before)
             soft_limit = 100.0
             if complexity_score > soft_limit:
                 complexity_score = soft_limit + math.log1p(complexity_score - soft_limit) * 20
 
         else:
-    # Use original formula for other types
             complexity_score = calculate_dossier_score(
-            dossier_type, n_articles, n_foreign_suppliers, n_suppliers_total
-    )
+                dossier_type, n_articles, n_foreign_suppliers, n_suppliers_total
+            )
         
-
         st.metric("Niveau de complexité", f"{complexity_score:.1f} unités")
         
         # --- Assignment Control ---
@@ -465,16 +456,21 @@ elif menu == "📝 Créer un Dossier":
             current_load = workload.get(assigned_to, 0)
             st.info(f"📊 Charge actuelle de {assigned_to} : {current_load:.1f} unités")
         
-        # --- Submit Button ---
+        # --- Submit Buttons ---
         st.markdown('<hr style="margin: 1rem 0; border-color: #e2e8f0;">', unsafe_allow_html=True)
         
-        if st.button("🟢 Créer et assigner", type="primary"):
+        col1, col2 = st.columns(2)
+        with col1:
+            create_and_assign = st.button("🟢 Créer et assigner", type="primary")
+        with col2:
+            save_as_draft = st.button("💾 Enregistrer comme brouillon")
+
+        # --- Handle "Créer et assigner" ---
+        if create_and_assign:
             if not st.session_state.desc.strip():
                 st.error("❌ Veuillez entrer une description")
             else:
-                # Generate or use manual code
                 manual_code_val = st.session_state.manual_code.strip() if st.session_state.manual_code else ""
-                
                 if manual_code_val:
                     if manual_code_val in st.session_state.dossiers["Code_Demande"].values:
                         st.warning(f"⚠️ Le code `{manual_code_val}` existe déjà. Veuillez en choisir un autre.")
@@ -483,7 +479,6 @@ elif menu == "📝 Créer un Dossier":
                 else:
                     new_code = generate_demande_code()
 
-                # Create new dossier
                 new_dossier = {
                     "Code_Demande": new_code,
                     "Description": st.session_state.desc,
@@ -501,12 +496,10 @@ elif menu == "📝 Créer un Dossier":
                     "Complexite": complexity_score
                 }
 
-                # Add to session state
                 new_row = pd.DataFrame([new_dossier])
                 st.session_state.dossiers = pd.concat([st.session_state.dossiers, new_row], ignore_index=True)
                 save_data()
 
-                # ✅ SHOW SUCCESS MESSAGE (it will render)
                 st.success(f"""
                 ✅ **Dossier créé avec succès !**
                 - **Code Demande**: `{new_code}`
@@ -515,7 +508,6 @@ elif menu == "📝 Créer un Dossier":
                 - **Complexité**: {complexity_score:.1f} unités
                 """)
 
-                # 📧 Outlook Email Button
                 buyer_email_row = st.session_state.buyers[st.session_state.buyers["Name"] == assigned_to]
                 buyer_email = ""
                 if not buyer_email_row.empty:
@@ -536,9 +528,51 @@ elif menu == "📝 Créer un Dossier":
                 else:
                     st.warning("ℹ️ Aucun email configuré pour cet acheteur.")
                 
-                # ✅ SET FLAG FOR RESET (don't rerun yet)
                 st.session_state.form_submitted = True
+
+        # --- Handle "Enregistrer comme brouillon" ---
+        if save_as_draft:
+            if not st.session_state.desc.strip():
+                st.error("❌ Veuillez entrer une description")
+            else:
+                manual_code_val = st.session_state.manual_code.strip() if st.session_state.manual_code else ""
+                if manual_code_val:
+                    if manual_code_val in st.session_state.dossiers["Code_Demande"].values:
+                        st.warning(f"⚠️ Le code `{manual_code_val}` existe déjà. Veuillez en choisir un autre.")
+                        st.stop()
+                    new_code = manual_code_val
+                else:
+                    new_code = generate_demande_code()
+
+                new_dossier = {
+                    "Code_Demande": new_code,
+                    "Description": st.session_state.desc,
+                    "Type": dossier_type,
+                    "Articles": n_articles,
+                    "Fournisseurs_Etrangers": n_foreign_suppliers,
+                    "Fournisseurs_Total": n_suppliers_total,
+                    "Buyer": "",  # ← No buyer
+                    "Status": "Brouillon",  # ← Draft status
+                    "Assigned_Date": "",  # ← Not assigned yet
+                    "Closed_Date": "",
+                    "Type_AO": st.session_state.type_ao or "",
+                    "Devise": st.session_state.devise,
+                    "Montant_Estime": st.session_state.montant_estime,
+                    "Complexite": complexity_score
+                }
+
+                new_row = pd.DataFrame([new_dossier])
+                st.session_state.dossiers = pd.concat([st.session_state.dossiers, new_row], ignore_index=True)
+                save_data()
+
+                st.success(f"""
+                ✅ **Brouillon enregistré avec succès !**
+                - **Code Demande**: `{new_code}`
+                - **Statut**: Brouillon (à affecter via 'ParallelGroup')
+                - **Complexité**: {complexity_score:.1f} unités
+                """)
                 
+                st.session_state.form_submitted = True
                    
 elif menu == "👥 Suivi des Acheteurs":
     st.markdown("### 👥 Suivi des Acheteurs")
@@ -774,6 +808,104 @@ elif menu == "📈 KPI":
         st.subheader("Analyse par statut")
         status_counts = st.session_state.dossiers["Status"].value_counts()
         st.bar_chart(status_counts)
+
+# --- BATCH ASSIGNMENT WITH ILP ---
+elif menu == "ParallelGroup":
+    st.markdown("### 📦 Affectation par lot (optimisation globale)")
+    
+    if st.session_state.dossiers.empty:
+        st.info("ℹ️ Aucun dossier disponible.")
+    elif st.session_state.buyers.empty:
+        st.warning("⚠️ Veuillez configurer des acheteurs.")
+    else:
+        # Filter: only unassigned dossiers (Status != "Affecté")
+        unassigned = st.session_state.dossiers[st.session_state.dossiers["Status"] != "Affecté"].copy()
+        
+        if unassigned.empty:
+            st.success("✅ Tous les dossiers sont déjà affectés.")
+        else:
+            st.info(f"📁 {len(unassigned)} dossier(s) non affecté(s) disponibles.")
+            
+            # Let user select which to include in batch
+            st.markdown("#### Sélectionner les dossiers à affecter")
+            selected_indices = []
+            for idx, row in unassigned.iterrows():
+                if st.checkbox(f"`{row['Code_Demande']}` - {row['Description'][:50]}...", key=f"select_{idx}"):
+                    selected_indices.append(idx)
+            
+            if not selected_indices:
+                st.warning("⚠️ Veuillez sélectionner au moins un dossier.")
+            else:
+                selected_dossiers = unassigned.loc[selected_indices]
+                st.write(f"**{len(selected_dossiers)} dossier(s) sélectionné(s)**")
+                
+                if st.button("🚀 Lancer l'optimisation", type="primary"):
+                    try:
+                        import pulp
+                        
+                        # Prepare data
+                        D = selected_dossiers.index.tolist()
+                        A = st.session_state.buyers["Name"].tolist()
+                        C = {d: selected_dossiers.loc[d, "Complexite"] for d in D}
+                        
+                        # Create problem
+                        prob = pulp.LpProblem("BatchAssignment", pulp.LpMinimize)
+                        
+                        # Decision variables
+                        x = pulp.LpVariable.dicts("assign", [(d, a) for d in D for a in A], cat='Binary')
+                        Z = pulp.LpVariable("max_load", lowBound=0)
+                        
+                        # Objective: minimize max load
+                        prob += Z
+                        
+                        # Each dossier assigned once
+                        for d in D:
+                            prob += pulp.lpSum(x[(d, a)] for a in A) == 1
+                        
+                        # Max load definition
+                        for a in A:
+                            prob += pulp.lpSum(C[d] * x[(d, a)] for d in D) <= Z
+                        
+                        # Solve
+                        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=30)
+                        result = prob.solve(solver)
+                        
+                        if pulp.LpStatus[prob.status] == "Optimal" or pulp.LpStatus[prob.status] == "Not Solved":
+                            # Extract solution
+                            assignments = {}
+                            for d in D:
+                                for a in A:
+                                    if pulp.value(x[(d, a)]) > 0.5:
+                                        assignments[d] = a
+                            
+                            # Update session state
+                            for d_idx, buyer in assignments.items():
+                                st.session_state.dossiers.loc[d_idx, "Buyer"] = buyer
+                                st.session_state.dossiers.loc[d_idx, "Status"] = "Affecté"
+                                st.session_state.dossiers.loc[d_idx, "Assigned_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            
+                            save_data()
+                            
+                            # Show results
+                            st.success(f"✅ Affectation optimale terminée ! Max workload = {pulp.value(Z):.1f}")
+                            
+                            # Display assignment
+                            result_df = pd.DataFrame([
+                                {
+                                    "Code Demande": st.session_state.dossiers.loc[d, "Code_Demande"],
+                                    "Acheteur": buyer,
+                                    "Complexité": st.session_state.dossiers.loc[d, "Complexite"]
+                                }
+                                for d, buyer in assignments.items()
+                            ])
+                            st.dataframe(result_df, use_container_width=True, hide_index=True)
+                            
+                        else:
+                            st.error(f"❌ Impossible de résoudre le problème : {pulp.LpStatus[prob.status]}")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de l'optimisation : {str(e)}")
+
 
 # --- FOOTER ---
 st.markdown("<hr style='margin: 2rem 0;'>", unsafe_allow_html=True)
